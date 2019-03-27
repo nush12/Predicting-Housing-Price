@@ -1,0 +1,172 @@
+---
+title: "DataMining2_Assignment1"
+author: "Anusha"
+date: "March 11, 2019"
+output:
+  html_document:
+    df_print: paged
+    theme: lumen
+---
+
+```{r setup, include=FALSE}
+library(MASS)
+library(rpart)
+library(rpart.plot)
+library(dplyr)
+library(ipred)
+library(randomForest)
+library(gbm)
+library(ggplot2)
+
+set.seed(12968860)
+data(Boston)
+```
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Linear Regression -------------------------------------------------------
+###########################################################################
+# Create Test and Train samples -------------------------------------------
+
+sample_index <- sample(nrow(Boston),nrow(Boston)*0.90)
+Boston_train <- Boston[sample_index,]
+Boston_test <- Boston[-sample_index,]
+
+
+# Stepwise Model Selection ------------------------------------------------
+
+nullmodel=lm(medv~1, data=Boston_train)
+fullmodel=lm(medv~., data=Boston_train)
+
+model_final <- step(nullmodel, scope=list(lower=nullmodel, upper=fullmodel), 
+                    direction='forward')
+#model_final <- lm(medv ~ log(lstat) + log(rm) + ptratio + dis + nox + black + zn +
+#                    chas + crim + rad + tax, data = Boston_train )
+
+out_sample <- predict(object = model_final, newdata = Boston_test)
+in_sample <- predict(object = model_final, newdata = Boston_train)
+
+mse_test <- mean((out_sample - Boston_test$medv)^2)
+mse_train <- mean((in_sample - Boston_train$medv)^2)
+
+plot(model_final)
+
+
+# Regression Tree ---------------------------------------------------------
+###########################################################################
+
+Boston_tree_model <- rpart(formula = medv ~ ., data = Boston_train)
+prp(Boston_tree_model,digits = 4, extra = 1)
+rpart.plot(Boston_tree_model, # middle grap # show fitted class, probs, percentages
+           box.palette = "GnBu", # color scheme
+           branch.lty = 3, # dotted branch lines
+           shadow.col = "gray", # shadows under the node boxes
+           nn = TRUE)
+
+
+Boston_in_tree = predict(Boston_tree_model)
+Boston_out_tree = predict(Boston_tree_model, Boston_test)
+
+mse_in_tree <- mean((Boston_in_tree - Boston_train$medv)^2)
+mse_out_tree <-  mean((Boston_out_tree - Boston_test$medv)^2)
+
+
+# Bagging -----------------------------------------------------------
+###########################################################################
+
+Boston_bag<- bagging(medv~., data = Boston_train, nbagg=100)
+Boston_bag
+
+Boston_bag_in <- predict(Boston_bag, newdata = Boston_train)
+Boston_bag_out <- predict(Boston_bag, newdata = Boston_test)
+mse_in_bag <- mean((Boston_train$medv-Boston_bag_in)^2)
+mse_out_bag <- mean((Boston_test$medv-Boston_bag_out)^2)
+
+
+ntree<- c(1, 3, 5, seq(10, 200, 10))
+MSE.test<- rep(0, length(ntree))
+
+for(i in 1:length(ntree)){
+  boston.bag1<- bagging(medv~., data = Boston_train, nbagg=ntree[i])
+  boston.bag.pred1<- predict(boston.bag1, newdata = Boston_test)
+  MSE.test[i]<- mean((Boston_test$medv-boston.bag.pred1)^2)
+}
+
+
+data1 <- data.frame(ntree, MSE.test)
+
+  ggplot(data1, aes( x = ntree, y = MSE.test)) + 
+    geom_line(colour = "Darkseagreen4", size = 1.25) +
+    theme_grey()
+  
+  boston.bag.oob<- bagging(medv~., data = Boston_train, coob=T, nbagg=100)
+  boston.bag.oob  
+  
+#  ggplot(data1, aes( x = ntree, y = MSE.test)) + 
+#    geom_boxplot()
+
+# Random Forest -----------------------------------------------------------
+###########################################################################
+  
+  Boston_RF<- randomForest(medv~., data = Boston_train, importance=TRUE)
+  Boston_RF
+
+  Boston_RF$importance  
+  plot(Boston_RF$mse, type='l', col="Darkseagreen3", lwd=2, xlab = "ntree", ylab = "OOB Error")
+  
+  Boston_RF_pred<- predict(Boston_RF, Boston_test)
+  mse_RF_out <- mean((Boston_test$medv-Boston_RF_pred)^2)
+  
+  oob_err<- rep(0, 13)
+  test_err<- rep(0, 13)
+  for(i in 1:13){
+    fit<- randomForest(medv~., data = Boston_train, mtry=i)
+    oob_err[i]<- fit$mse[500]
+    test_err[i]<- mean((Boston_test$medv-predict(fit, Boston_test))^2)
+    cat(i, " ")
+  }
+  
+data_plot1 <- data.frame(oob_err)
+data_plot2 <- data.frame(test_err)
+
+names(data_plot1) <- "error"
+names(data_plot2) <- "error"
+data_plot <- rbind(data_plot1, data_plot2)
+data_plot1 <- mutate(data_plot1, type = "oob_error")
+data_plot2 <- mutate(data_plot2, type = "test_error")
+data_plot[1:13,2] <- "oob_err"
+data_plot[14:26,2] <- "test_err"
+
+
+#ggplot(data_plot1, aes(x = seq(1,13,1), y = error)) +
+#  geom_point(colour = "Tomato2") +
+ # geom_point(data=data_plot2, colour='blue') +
+  #geom_line(data = data_plot2, colour = "skyblue") +
+  #geom_line(colour = "Tomato")
+
+matplot(cbind(test_err, oob_err), pch=15, col = c("Darkseagreen", "orchid3"), type = "b", ylab = "MSE", xlab = "mtry")
+legend("topright", legend = c("test Error", "OOB Error"), pch = 15, col = c("Darkseagreen", "orchid3"))
+
+
+# Boosting ----------------------------------------------------------------
+###########################################################################
+
+Boston_boost<- gbm(medv~., data = Boston_train, distribution = "gaussian", 
+                   n.trees = 10000, shrinkage = 0.01, interaction.depth = 8)
+summary(Boston_boost)
+
+par(mfrow=c(1,2))
+plot(Boston_boost, i="lstat")
+plot(Boston_boost, i="rm")
+
+Boston_boost_train_pred<- predict(Boston_boost, Boston_train, n.trees = 6000)
+mean((Boston_train$medv-Boston_boost_train_pred)^2)
+
+Boston_boost_test_pred<- predict(Boston_boost, Boston_test, n.trees = 6000)
+mean((Boston_test$medv-Boston_boost_test_pred)^2)
+
+ntree<- seq(100, 10000, 100)
+predmat<- predict(Boston_boost, newdata = Boston_test, n.trees = ntree)
+err<- apply((predmat-Boston_test$medv)^2, 2, mean)
+plot(ntree, err, type = 'l', col="Darkseagreen3", lwd=2, xlab = "n.trees", ylab = "Test MSE")
+abline(h=min(err), lty=2)
+```
